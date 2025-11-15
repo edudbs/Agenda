@@ -100,7 +100,7 @@ def list_calendar_events(max_results: int = 10) -> List[Dict]:
     
     try:
         events_result = service.events().list(
-            calendarId="edudbs@gmail.com", # <--- CORREÇÃO 1: Endereçamento
+            calendarId="edudbs@gmail.com",
             timeMin=now,
             maxResults=max_results,
             singleEvents=True,
@@ -135,7 +135,7 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
     }
 
     try:
-        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute() # <--- CORREÇÃO 1: Endereçamento
+        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute()
         return {"created": True, "event_id": event.get("id"), "summary": event.get("summary")}
     except Exception as e:
         return {"error": f"Erro ao criar evento: {e}"}
@@ -152,7 +152,6 @@ def ping():
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY"))
     }
 
-# Adaptei os endpoints para usar query params (mais fácil de testar no navegador)
 @app.get("/events")
 def get_events(token: str): 
     check_auth(token)
@@ -186,18 +185,29 @@ def chat(query: str, token: str):
     if not client:
         raise HTTPException(status_code=500, detail="Erro de Configuração do Gemini. Verifique a chave API.")
 
-    # 1. Definir o sistema de instrução (Já corrigido)
+    # ----------------------------------------------------------------------------------
+    # CORREÇÃO 1: INJEÇÃO DE DATA/HORA ATUAL E NOVA INSTRUÇÃO DE SISTEMA PARA TEMPO RELATIVO
+    # ----------------------------------------------------------------------------------
+    
+    # Calcular Data e Hora Atual (em UTC) para o Gemini
+    now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+    
+    # 1. Definir o sistema de instrução (Inteligência e Formato)
     system_instruction = (
-        "Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
-    "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
-    "Siga estas regras rigorosamente: "
-    "1. SEMPRE use a função 'list_calendar_events' ao planejar, sugerir ou resumir o dia/semana do usuário. "
-    "2. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas. "
-    "3. Se o usuário pedir uma sugestão ou plano para o dia/semana (ex: 'sugira minha programação de amanhã'), use os eventos listados para identificar lacunas de tempo livre. "
-    "4. Ao sugerir uma programação, você deve incluir todos os eventos existentes e, em seguida, sugerir blocos de tempo livre ou atividades que se encaixem nos espaços vazios (ex: 'Você tem tempo livre das 14h às 17h, ideal para Foco Profundo'). "
-    "5. Mantenha um tom profissional, proativo e consultivo."
+        f"Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
+        f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " # <--- CONTEXTO DE DATA/HORA
+        "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
+        "Siga estas regras rigorosamente: "
+        
+        "**REGRA CHAVE:** Antes de chamar 'add_calendar_event', você deve converter **TODAS** as referências de tempo (hoje, amanhã, próxima semana, etc.) para o formato ISO 8601 completo (Ex: 2025-11-15T17:30:00). Você **nunca** deve passar palavras como 'amanhã' ou 'hoje' nos argumentos de tempo."
+        
+        "1. SEMPRE use a função 'list_calendar_events' ao planejar, sugerir ou resumir o dia/semana do usuário. "
+        "2. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas. "
+        "3. Ao planejar ou sugerir, use a lista de eventos para identificar lacunas de tempo livre. "
+        "4. Mantenha um tom profissional, proativo e consultivo."
     )
-
+    # ----------------------------------------------------------------------------------
+    
     # Ferramentas disponíveis para o modelo
     tools = [list_calendar_events, add_calendar_event]
 
@@ -215,7 +225,7 @@ def chat(query: str, token: str):
         # 3. Processar a Resposta: Checar se houve uma solicitação de Function Call
         
         # -------------------------------------------------------------------------
-        # BLOCO CORRIGIDO PARA RESOLVER O PROBLEMA DE RELATÓRIO 'function_used:null'
+        # CORREÇÃO 2: BLOCO CORRIGIDO PARA RESOLVER O PROBLEMA DE RELATÓRIO 'function_used:null'
         # -------------------------------------------------------------------------
 
         if not response.function_calls:
@@ -226,7 +236,7 @@ def chat(query: str, token: str):
 
         # Extrai a primeira função e garante que o nome seja uma string serializável
         tool_call = response.function_calls[0]
-        function_name = str(tool_call.name) # <-- CORREÇÃO 3: Extração de String Garantida
+        function_name = str(tool_call.name) # <--- GARANTIA DE STRING SIMPLES
         
         tool_output = None
         args = dict(tool_call.args)
