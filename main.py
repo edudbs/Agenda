@@ -8,6 +8,8 @@ from googleapiclient.discovery import build
 from google import genai
 from google.genai.errors import APIError
 from typing import List, Dict, Optional
+# Importação necessária para lidar com o histórico de conversas
+from google.genai.types import Content, Part 
 
 # --- Inicialização ---
 
@@ -80,7 +82,6 @@ USER_TIMEZONE = "America/Sao_Paulo"
 def format_event(e: Dict) -> Dict:
     """Função auxiliar para formatar um evento do Google Calendar."""
     start = e["start"].get("dateTime", e["start"].get("date"))
-    # Adicionando o ID para que o Gemini possa usá-lo em modificações/exclusões
     return {
         "summary": e.get("summary", "Sem título"),
         "start": start,
@@ -144,7 +145,7 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
     except Exception as e:
         return {"error": f"Erro ao criar evento: {e}"}
 
-# --- NOVA FUNÇÃO 1: EXCLUIR EVENTO ---
+# --- FUNÇÃO 1: EXCLUIR EVENTO ---
 def delete_calendar_event(event_id: str) -> Dict:
     """
     Exclui um compromisso da agenda do Google Calendar.
@@ -162,7 +163,7 @@ def delete_calendar_event(event_id: str) -> Dict:
     except Exception as e:
         return {"error": f"Erro ao excluir evento (ID: {event_id}): {e}"}
 
-# --- NOVA FUNÇÃO 2: MODIFICAR EVENTO ---
+# --- FUNÇÃO 2: MODIFICAR EVENTO ---
 def modify_calendar_event(event_id: str, summary: Optional[str] = None, start_datetime: Optional[str] = None, end_datetime: Optional[str] = None, timezone: str = USER_TIMEZONE) -> Dict:
     """
     Modifica um compromisso existente na agenda. Pelo menos um campo deve ser fornecido para modificação.
@@ -201,7 +202,7 @@ def modify_calendar_event(event_id: str, summary: Optional[str] = None, start_da
         return {"error": f"Erro ao modificar evento (ID: {event_id}): {e}"}
 
 
-# --- Endpoints da API ---
+# --- Endpoints da API (sem alterações) ---
 
 @app.get("/ping")
 def ping():
@@ -239,7 +240,7 @@ def create_event(summary: str, start_datetime: str, end_datetime: str, token: st
 # --- Agente Inteligente (Gemini Function Calling) ---
 
 @app.get("/chat")
-def chat(query: str, token: str):
+def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o histórico
     check_auth(token)
     client = get_gemini_client()
     if not client:
@@ -249,14 +250,14 @@ def chat(query: str, token: str):
     # Calcular Data e Hora Atual (em UTC) para o Gemini
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
-    # ----------------------------------------------------------------------------------
-    # INSTRUÇÕES DE SISTEMA CORRIGIDAS E COMPLETAS
-    # ----------------------------------------------------------------------------------
     system_instruction = (
         f"Você é um planejador de agenda altamente inteligente e prestativo. "
         f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " 
         f"O fuso horário local do usuário para criação de eventos é: **{USER_TIMEZONE}**."
         "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
+        
+        "**IMPORTANTE:** Você está recebendo o histórico da conversa. Use-o para responder a perguntas de acompanhamento ou confirmações (ex: 'sim', 'não')."
+        
         "Siga estas regras rigorosamente: "
         
         "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo para o formato ISO 8601. "
@@ -274,16 +275,40 @@ def chat(query: str, token: str):
         
         "5. Mantenha um tom profissional, proativo e consultivo."
     )
-    # ----------------------------------------------------------------------------------
     
+    # --- Processamento do Histórico de Conversa ---
+    full_conversation_parts = []
+    if history:
+        try:
+            history_data = json.loads(history)
+            for turn in history_data:
+                if 'role' in turn and 'text' in turn:
+                    # Cria o objeto Content para cada turno do histórico
+                    full_conversation_parts.append(
+                        Content(
+                            role=turn['role'], 
+                            parts=[Part.from_text(turn['text'])]
+                        )
+                    )
+        except json.JSONDecodeError:
+            print("Formato de histórico JSON inválido recebido.")
+            
+    # Adiciona a consulta atual como o último turno do usuário
+    full_conversation_parts.append(
+        Content(
+            role="user",
+            parts=[Part.from_text(query)]
+        )
+    )
+
     # Ferramentas disponíveis (todas)
     tools = [list_calendar_events, add_calendar_event, delete_calendar_event, modify_calendar_event]
 
     try:
-        # 1. Primeira Chamada ao Gemini
+        # 1. Primeira Chamada ao Gemini (com histórico completo)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=query,
+            contents=full_conversation_parts, # <-- Usa o histórico completo
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=tools
@@ -293,7 +318,7 @@ def chat(query: str, token: str):
         # 2. Processar a Resposta: Checar se houve uma solicitação de Function Call
         
         if not response.function_calls:
-            # Caso 1: O modelo responde diretamente.
+            # Caso 1: O modelo responde diretamente. (Inclui respostas a confirmações)
             return {"answer": response.text, "function_used": None}
 
         # Caso 2: O modelo solicita uma chamada de função.
@@ -320,13 +345,31 @@ def chat(query: str, token: str):
             tool_output = {"error": f"Função desconhecida: {function_name}"}
 
         # 3. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
+        
+        # Base: Histórico completo (incluindo a última query do usuário)
+        history_for_second_call = full_conversation_parts[:] 
+
+        # Adiciona: 
+        # a) Resposta inicial do Modelo (chamada de função)
+        history_for_second_call.append(response.candidates[0].content)
+
+        # b) Saída da Ferramenta (resultado da função executada)
+        history_for_second_call.append(
+             Content(
+                role="tool",
+                parts=[
+                    Part.from_function_response(
+                        name=tool_call.name, 
+                        response=tool_output
+                    )
+                ]
+            )
+        )
+        
+        # Chama o modelo com o histórico estendido
         second_response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=[
-                {"role": "user", "parts": [{"text": query}]},
-                {"role": "model", "parts": [response.candidates[0].content.parts[0]]},
-                {"role": "tool", "parts": [{"functionResponse": {"name": tool_call.name, "response": tool_output}}]}
-            ],
+            contents=history_for_second_call,
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=tools
@@ -337,8 +380,6 @@ def chat(query: str, token: str):
         return {"answer": second_response.text, "function_used": function_name}
         
     except APIError as e:
-        # Tratamento de erro da API do Google Gemini
         raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
     except Exception as e:
-        # Tratamento de erro interno ou genérico
         raise HTTPException(status_code=500, detail=f"Erro interno do agente: {e}")
