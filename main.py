@@ -196,24 +196,26 @@ def chat(query: str, token: str):
     # Calcular Data e Hora Atual (em UTC) para o Gemini
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
+    # Fuso horário seguro para o Brasil (Brasília)
+    USER_TIMEZONE = "America/Sao_Paulo" 
+    
     # ----------------------------------------------------------------------------------
-    # CORREÇÃO: INSTRUÇÃO DE SISTEMA REFORÇADA PARA O FORMATO ISO 8601 COM Z
+    # CORREÇÃO: INSTRUÇÃO DE SISTEMA REFORÇADA PARA TRATAR CRIAÇÃO E LISTAGEM SEPARADAMENTE
     # ----------------------------------------------------------------------------------
     system_instruction = (
         f"Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
         f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " 
+        f"O fuso horário local do usuário para criação de eventos é: **{USER_TIMEZONE}**."
         "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
         "Siga estas regras rigorosamente: "
         
-        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo (incluindo datas relativas) para o formato ISO 8601 completo com fuso horário **UTC (sufixo 'Z')**. Ex: `2025-11-17T17:30:00Z`."
+        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo para o formato ISO 8601. A conversão depende da função: "
         
-        "1. **LISTAGEM ESPECÍFICA:** Se o usuário pedir eventos para um dia (Ex: 'próxima segunda-feira', 'amanhã'), você **DEVE** chamar `list_calendar_events` definindo o intervalo exato: "
-        "   - `start_datetime`: Início do dia, formatado como **YYYY-MM-DDT00:00:00Z**."
-        "   - `end_datetime`: Fim do dia, formatado como **YYYY-MM-DDT23:59:59Z**."
+        "1. **LISTAGEM ESPECÍFICA (list_calendar_events):** Se o usuário pedir eventos para um dia, **você DEVE** passar as datas no fuso horário **UTC (sufixo 'Z')** para os argumentos `start_datetime` e `end_datetime`. Ex: `2025-11-17T00:00:00Z`."
+
+        "2. **CRIAÇÃO DE EVENTOS (add_calendar_event):** Se o usuário pedir para criar um evento, você **DEVE** passar as datas no fuso horário **local do usuário (sem sufixo Z)** para `start_datetime` e `end_datetime`. Ex: `2025-11-17T10:00:00`. Além disso, você **DEVE** passar o fuso horário local do usuário (`{USER_TIMEZONE}`) para o argumento `timezone`."
         
-        "2. **LISTAGEM GERAL:** Se o usuário pedir os próximos eventos sem especificar uma data, use **'list_calendar_events'** sem os argumentos 'start_datetime' e 'end_datetime'."
-        
-        "3. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas (e com o sufixo Z, se UTC)."
+        "3. **LISTAGEM GERAL:** Se o usuário pedir os próximos eventos sem especificar uma data, use **'list_calendar_events'** sem os argumentos 'start_datetime' e 'end_datetime'."
         
         "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada."
         
@@ -253,6 +255,7 @@ def chat(query: str, token: str):
             tool_output = list_calendar_events(**args)
         
         elif function_name == "add_calendar_event":
+            # Aqui, os argumentos args já contêm a hora local e o timezone correto, graças à instrução
             tool_output = add_calendar_event(**args)
         
         else:
