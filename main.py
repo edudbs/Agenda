@@ -180,7 +180,7 @@ def create_event(summary: str, start_datetime: str, end_datetime: str, token: st
 # --- Agente Inteligente (Gemini Function Calling) ---
 
 @app.get("/chat")
-def chat(query: str, token: str = Header(None)):
+def chat(query: str, token: str):
     check_auth(token)
     client = get_gemini_client()
     if not client:
