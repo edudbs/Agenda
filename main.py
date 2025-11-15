@@ -294,7 +294,7 @@ def chat(query: str, token: str, history: Optional[str] = None):
                     full_conversation_parts.append(
                         Content(
                             role=turn['role'], 
-                            parts=[Part.from_text(turn['text'])]
+                            parts=[Part(text=turn['text'])]
                         )
                     )
         except json.JSONDecodeError:
@@ -304,7 +304,7 @@ def chat(query: str, token: str, history: Optional[str] = None):
     full_conversation_parts.append(
         Content(
             role="user",
-            parts=[Part.from_text(query)]
+            parts=[Part(text=query)]
         )
     )
 
