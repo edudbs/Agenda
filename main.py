@@ -1,2 +1,7 @@
+from fastapi import FastAPI
 
-<actual main.py content here>
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "API funcionando no Render!"}
