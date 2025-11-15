@@ -188,9 +188,11 @@ def chat(query: str, token: str):
 
     # 1. Definir o sistema de instrução
     system_instruction = (
-        "Você é um assistente de organização pessoal. Sua função é responder a perguntas sobre a agenda "
-        "do usuário ou criar novos compromissos, usando as funções de calendário disponíveis. "
-        "Sempre que o usuário pedir uma ação, use a ferramenta (Function Calling). Responda de forma clara e objetiva."
+        "Você é um agente de planejamento e calendário. SUA FUNÇÃO PRIMÁRIA E ÚNICA É INTERAGIR COM A AGENDA DO USUÁRIO "
+    "USANDO AS FERRAMENTAS FORNECIDAS. NUNCA RESPONDA PERGUNTAS SOBRE AGENDA SEM USAR UMA FERRAMENTA. "
+    "Use a função 'list_calendar_events' para qualquer consulta de disponibilidade. "
+    "Use a função 'add_calendar_event' para qualquer solicitação de agendamento. "
+    "Responda ao usuário com base no resultado da execução da ferramenta."
     )
 
     # Ferramentas disponíveis para o modelo
