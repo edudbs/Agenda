@@ -76,7 +76,7 @@ def get_gemini_client():
 
 
 # --- Funções de Ferramenta (Tools) para o Gemini ---
-CALENDAR_ID = "edudbs@gmail.com"
+CALENDAR_ID = os.getenv("CALENDAR_ID", "edudbs@gmail.com") # Melhor usar variável de ambiente
 USER_TIMEZONE = "America/Sao_Paulo" 
 
 def format_event(e: Dict) -> Dict:
@@ -202,7 +202,13 @@ def modify_calendar_event(event_id: str, summary: Optional[str] = None, start_da
         return {"error": f"Erro ao modificar evento (ID: {event_id}): {e}"}
 
 
-# --- Endpoints da API (sem alterações) ---
+# --- Endpoints da API ---
+
+# NOVO ENDPOINT DE HEALTH CHECK (Corrigindo o problema do Render)
+@app.get("/")
+def health_check():
+    """Endpoint essencial para o Render verificar se o serviço está ativo."""
+    return {"status": "Serviço ativo", "info": "A API está respondendo"}
 
 @app.get("/ping")
 def ping():
@@ -237,10 +243,10 @@ def create_event(summary: str, start_datetime: str, end_datetime: str, token: st
     return result
 
 
-# --- Agente Inteligente (Gemini Function Calling) ---
+# --- Agente Inteligente (Gemini Function Calling com Histórico) ---
 
 @app.get("/chat")
-def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o histórico
+def chat(query: str, token: str, history: Optional[str] = None):
     check_auth(token)
     client = get_gemini_client()
     if not client:
@@ -267,18 +273,19 @@ def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o 
         "2. **CRIAÇÃO (add_calendar_event):** Se for criar um evento, use a data/hora no fuso horário **local do usuário (sem sufixo Z)**, e **DEVE** passar `{USER_TIMEZONE}` para o argumento `timezone`. Ex: `2025-11-17T10:00:00` e `timezone='America/Sao_Paulo'`."
         
         "3. **EXCLUSÃO E MODIFICAÇÃO:** "
-        "   a. Para **excluir** (`delete_calendar_event`) ou **modificar** (`Calendar`), você **DEVE** ter o **`event_id`**. "
-        "   b. Se o usuário pedir para alterar ou excluir um evento, mas não fornecer o ID, você **DEVE** primeiro chamar `list_calendar_events` para listar os eventos relevantes e encontrar o `event_id`. Se houver ambiguidade, peça ao usuário para especificar qual evento pelo horário ou título exato."
-        "   c. Para **modificar**, mantenha o fuso horário local (sem sufixo Z) e passe `{USER_TIMEZONE}` para o argumento `timezone`."
+        "   a. Para **excluir** (`delete_calendar_event`) ou **modificar** (`Calendar`), você **DEVE** ter o **`event_id`**. "
+        "   b. Se o usuário pedir para alterar ou excluir um evento, mas não fornecer o ID, você **DEVE** primeiro chamar `list_calendar_events` para listar os eventos relevantes e encontrar o `event_id`. Se houver ambiguidade, peça ao usuário para especificar qual evento pelo horário ou título exato."
+        "   c. Para **modificar**, mantenha o fuso horário local (sem sufixo Z) e passe `{USER_TIMEZONE}` para o argumento `timezone`."
         
         "4. **Formatação de Saída:** Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas)."
         
         "5. Mantenha um tom profissional, proativo e consultivo."
     )
     
-    # --- Processamento do Histórico de Conversa ---
+    # --- Processamento do Histórico de Conversa (CORREÇÃO DE ROBUSTEZ) ---
     full_conversation_parts = []
-    if history:
+    # Verifica se há histórico e se não é uma string vazia/null
+    if history and history != 'null':
         try:
             history_data = json.loads(history)
             for turn in history_data:
@@ -308,7 +315,7 @@ def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o 
         # 1. Primeira Chamada ao Gemini (com histórico completo)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=full_conversation_parts, # <-- Usa o histórico completo
+            contents=full_conversation_parts, # Usa o histórico completo
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=tools
@@ -340,7 +347,7 @@ def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o 
             
         elif function_name == "modify_calendar_event":
             tool_output = modify_calendar_event(**args)
-        
+            
         else:
             tool_output = {"error": f"Função desconhecida: {function_name}"}
 
@@ -355,7 +362,7 @@ def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o 
 
         # b) Saída da Ferramenta (resultado da função executada)
         history_for_second_call.append(
-             Content(
+            Content(
                 role="tool",
                 parts=[
                     Part.from_function_response(
@@ -382,4 +389,11 @@ def chat(query: str, token: str, history: Optional[str] = None): # <-- Recebe o 
     except APIError as e:
         raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno do agente: {e}")
+        # Se for um erro da função do Google Calendar, tentamos extrair o detalhe
+        error_detail = str(e)
+        if hasattr(e, 'resp') and 'content' in e.resp:
+             try:
+                 error_detail = json.loads(e.resp['content'])['error']['message']
+             except Exception:
+                 pass
+        raise HTTPException(status_code=500, detail=f"Erro interno do agente: {error_detail}")
