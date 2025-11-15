@@ -221,7 +221,7 @@ def plan_day(req: PlanRequest = Body(...)):
     ).execute()
     events = events_result.get("items", [])
 
-    event_lines = "\\n".join([f\"- {e.get('start')} → {e.get('summary')}\" for e in events]) or "Nenhum evento."
+    event_lines = "\n".join([f"- {e.get('start')} → {e.get('summary')}" for e in events]) or "Nenhum evento."
     tasks_section = ""
     if req.tasks:
         tasks_section = "\\nTarefas pendentes:\\n" + "\\n".join(f"- {t}" for t in req.tasks)
