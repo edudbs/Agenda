@@ -1,41 +1,51 @@
+# main.py
 import os
 import json
 from typing import Optional, List
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException, Body, Header, Depends
 from pydantic import BaseModel
 import openai
-import requests
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
+# --- App & config ---
 app = FastAPI(title="Agente de Planejamento - FastAPI (Service Account)")
 
-# --- Configuration via environment variables ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")  # paste the service account JSON here
-# Optionally the calendar id (your email). If empty, will try 'primary' (may refer to service account calendar).
-CALENDAR_ID = os.getenv("CALENDAR_ID", None)
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")  # service account JSON content
+CALENDAR_ID = os.getenv("CALENDAR_ID", None)  # optional: your personal calendar id (email)
+AGENT_SECRET = os.getenv("AGENT_SECRET")  # secret to protect endpoints (set in Render)
 
-if not OPENAI_API_KEY:
-    # Service starts but calendar endpoints will raise helpful errors until configured
-    app.state.openai_configured = False
-else:
-    app.state.openai_configured = True
+# set flags
+app.state.openai_configured = bool(OPENAI_API_KEY)
+app.state.calendar_configured = bool(GOOGLE_CREDENTIALS_JSON)
+
+if app.state.openai_configured:
     openai.api_key = OPENAI_API_KEY
 
-if not GOOGLE_CREDENTIALS_JSON:
-    app.state.calendar_configured = False
-else:
-    app.state.calendar_configured = True
+# --- Security dependency ---
+def require_agent_auth(authorization: Optional[str] = Header(None)):
+    """
+    Expects header: Authorization: Bearer <AGENT_SECRET>
+    """
+    if not AGENT_SECRET:
+        # if no secret configured, still allow (but warn)
+        return True
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != AGENT_SECRET:
+        raise HTTPException(status_code=403, detail="Invalid or missing agent secret")
+    return True
 
 # --- Google Calendar helper ---
 def get_calendar_service():
     if not app.state.calendar_configured:
-        raise HTTPException(status_code=500, detail="GOOGLE_CREDENTIALS_JSON not set in environment.")
+        raise HTTPException(status_code=500, detail="GOOGLE_CREDENTIALS_JSON not configured.")
     try:
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
     except Exception as e:
@@ -58,7 +68,7 @@ def parse_datetime(dt_str: str) -> datetime:
             return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
         return datetime.fromisoformat(dt_str)
     except Exception:
-        # try date-only
+        # date-only
         return datetime.fromisoformat(dt_str + "T00:00:00+00:00")
 
 # --- Models ---
@@ -78,12 +88,13 @@ class PlanRequest(BaseModel):
 def ping():
     return {"status": "ok", "calendar_configured": app.state.calendar_configured, "openai_configured": app.state.openai_configured}
 
-@app.get("/events")
+@app.get("/events", dependencies=[Depends(require_agent_auth)])
 def list_events(date: Optional[str] = None, max_results: int = 50):
-    """List events for a given date (YYYY-MM-DD). If date omitted, list next upcoming events."""
-    if not app.state.calendar_configured:
-        raise HTTPException(status_code=400, detail="Calendar not configured (set GOOGLE_CREDENTIALS_JSON).")
-
+    """
+    GET /events?date=YYYY-MM-DD
+    If date omitted, returns upcoming events.
+    Protected with Bearer token.
+    """
     service = get_calendar_service()
     calendar_id = CALENDAR_ID or "primary"
 
@@ -97,21 +108,14 @@ def list_events(date: Optional[str] = None, max_results: int = 50):
         timeMin = start_dt.isoformat().replace("+00:00", "Z")
         timeMax = end_dt.isoformat().replace("+00:00", "Z")
         events_result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=timeMin,
-            timeMax=timeMax,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime"
+            calendarId=calendar_id, timeMin=timeMin, timeMax=timeMax,
+            maxResults=max_results, singleEvents=True, orderBy="startTime"
         ).execute()
     else:
         timeMin = iso_utc_now()
         events_result = service.events().list(
-            calendarId=calendar_id,
-            timeMin=timeMin,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime"
+            calendarId=calendar_id, timeMin=timeMin,
+            maxResults=max_results, singleEvents=True, orderBy="startTime"
         ).execute()
 
     items = events_result.get("items", [])
@@ -127,23 +131,23 @@ def list_events(date: Optional[str] = None, max_results: int = 50):
         })
     return {"count": len(parsed), "events": parsed}
 
-@app.post("/events")
+@app.post("/events", dependencies=[Depends(require_agent_auth)])
 def create_event(req: CreateEventRequest):
-    if not app.state.calendar_configured:
-        raise HTTPException(status_code=400, detail="Calendar not configured (set GOOGLE_CREDENTIALS_JSON).")
+    """
+    Create event. Body: CreateEventRequest JSON.
+    Protected with Bearer token.
+    """
     service = get_calendar_service()
     calendar_id = CALENDAR_ID or "primary"
 
     def to_event_dt(s: str):
-        # If date-only, use 'date', else 'dateTime'
         try:
-            datetime.fromisoformat(s)
-            # contains time
+            # datetime with time
             if s.endswith("Z"):
                 return {"dateTime": s}
+            _ = datetime.fromisoformat(s)
             return {"dateTime": s}
         except Exception:
-            # date-only
             return {"date": s}
 
     event_body = {
@@ -158,23 +162,20 @@ def create_event(req: CreateEventRequest):
     created = service.events().insert(calendarId=calendar_id, body=event_body).execute()
     return {"created": True, "id": created.get("id"), "htmlLink": created.get("htmlLink")}
 
-@app.get("/suggest")
+@app.get("/suggest", dependencies=[Depends(require_agent_auth)])
 def suggest_free_slot(duration_min: int = 60):
-    if not app.state.calendar_configured:
-        raise HTTPException(status_code=400, detail="Calendar not configured (set GOOGLE_CREDENTIALS_JSON).")
+    """
+    Suggest a free time slot of duration_min minutes in the future.
+    """
     service = get_calendar_service()
     calendar_id = CALENDAR_ID or "primary"
     now = datetime.now(timezone.utc)
     events_result = service.events().list(
-        calendarId=calendar_id,
-        timeMin=now.isoformat().replace("+00:00","Z"),
-        maxResults=250,
-        singleEvents=True,
-        orderBy="startTime"
+        calendarId=calendar_id, timeMin=now.isoformat().replace("+00:00","Z"),
+        maxResults=250, singleEvents=True, orderBy="startTime"
     ).execute()
     events = events_result.get("items", [])
 
-    # Build timeline
     free_start = now
     for e in events:
         start_raw = e.get("start", {}).get("dateTime") or e.get("start", {}).get("date")
@@ -184,19 +185,18 @@ def suggest_free_slot(duration_min: int = 60):
             end_dt = parse_datetime(end_raw)
         except Exception:
             continue
-        # if there's a gap big enough between free_start and start_dt
         if (start_dt - free_start).total_seconds() >= duration_min * 60:
             return {"start": free_start.isoformat(), "end": (free_start + timedelta(minutes=duration_min)).isoformat()}
-        # move free_start forward if event ends later
         if end_dt > free_start:
             free_start = end_dt
-    # nothing found in future events — suggest starting now
+
     return {"start": now.isoformat(), "end": (now + timedelta(minutes=duration_min)).isoformat()}
 
-@app.post("/plan")
+@app.post("/plan", dependencies=[Depends(require_agent_auth)])
 def plan_day(req: PlanRequest = Body(...)):
-    if not app.state.calendar_configured:
-        raise HTTPException(status_code=400, detail="Calendar not configured (set GOOGLE_CREDENTIALS_JSON).")
+    """
+    Generate a day plan using OpenAI based on events and optional tasks.
+    """
     if not app.state.openai_configured:
         raise HTTPException(status_code=400, detail="OpenAI not configured (set OPENAI_API_KEY).")
 
@@ -211,34 +211,29 @@ def plan_day(req: PlanRequest = Body(...)):
 
     service = get_calendar_service()
     calendar_id = CALENDAR_ID or "primary"
-    # fetch events for day
     start_dt = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
     end_dt = start_dt + timedelta(days=1)
     events_result = service.events().list(
         calendarId=calendar_id,
         timeMin=start_dt.isoformat().replace('+00:00','Z'),
         timeMax=end_dt.isoformat().replace('+00:00','Z'),
-        maxResults=250,
-        singleEvents=True,
-        orderBy='startTime'
+        maxResults=250, singleEvents=True, orderBy='startTime'
     ).execute()
     events = events_result.get("items", [])
 
-    # build prompt
-    event_lines = "\n".join([f"- {e.get('start')} → {e.get('summary')}" for e in events]) or "Nenhum evento."
+    event_lines = "\\n".join([f\"- {e.get('start')} → {e.get('summary')}\" for e in events]) or "Nenhum evento."
     tasks_section = ""
     if req.tasks:
-        tasks_section = "\nTarefas pendentes:\n" + "\n".join(f"- {t}" for t in req.tasks)
-    prompt = f"""Você é um assistente organizacional. Hoje é {start_dt.date().isoformat()}.
+        tasks_section = "\\nTarefas pendentes:\\n" + "\\n".join(f"- {t}" for t in req.tasks)
+    prompt = f\"\"\"Você é um assistente organizacional. Hoje é {start_dt.date().isoformat()}.
 Eventos do meu Google Calendar para hoje:
 {event_lines}
 {tasks_section}
 
 Com base nisso, proponha um plano otimizado do dia com blocos de tempo (horários), prioridades e uma sugestão do que adiar se necessário. Seja prático e entregue no formato JSON com campos: morning, afternoon, evening, notes.
 
-Entregue apenas JSON."""
+Entregue apenas JSON.\"\"\"
 
-    # call OpenAI
     resp = openai.ChatCompletion.create(
         model=OPENAI_MODEL,
         messages=[
@@ -255,4 +250,4 @@ Entregue apenas JSON."""
         parsed = {"raw": text}
     return {"date": start_dt.date().isoformat(), "events_count": len(events), "plan": parsed}
 
-# Run with: uvicorn main:app --host 0.0.0.0 --port $PORT
+# end of file
