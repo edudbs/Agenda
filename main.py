@@ -7,7 +7,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from google import genai
 from google.genai.errors import APIError
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 # --- Inicialização ---
 
@@ -74,38 +74,38 @@ def get_gemini_client():
 
 
 # --- Funções de Ferramenta (Tools) para o Gemini ---
+CALENDAR_ID = "edudbs@gmail.com"
+USER_TIMEZONE = "America/Sao_Paulo" 
 
 def format_event(e: Dict) -> Dict:
     """Função auxiliar para formatar um evento do Google Calendar."""
     start = e["start"].get("dateTime", e["start"].get("date"))
+    # Adicionando o ID para que o Gemini possa usá-lo em modificações/exclusões
     return {
         "summary": e.get("summary", "Sem título"),
-        "start": start
+        "start": start,
+        "event_id": e.get("id") 
     }
 
 def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_datetime: str = None) -> List[Dict]:
     """
     Lista os próximos compromissos da agenda do usuário, opcionalmente filtrando por um intervalo de datas.
-    Use esta função para verificar a disponibilidade atual do usuário ou para listar eventos de um dia específico.
     
     Args:
         max_results: O número máximo de eventos a serem listados.
-        start_datetime: (Opcional) A data e hora de início do intervalo de pesquisa no formato ISO 8601 (Ex: 2025-11-17T00:00:00Z).
-        end_datetime: (Opcional) A data e hora de fim do intervalo de pesquisa no formato ISO 8601 (Ex: 2025-11-17T23:59:59Z).
+        start_datetime: A data e hora de início (ISO 8601 com 'Z' para UTC).
+        end_datetime: A data e hora de fim (ISO 8601 com 'Z' para UTC).
     """
     service = get_calendar_service()
     if not service:
         return [{"error": "Serviço de calendário não configurado ou inacessível."}] 
 
-    # Define o filtro de tempo mínimo: usa o 'start_datetime' fornecido ou o momento atual (se nenhum for fornecido)
     time_min_filter = start_datetime if start_datetime else (datetime.datetime.utcnow().isoformat() + "Z")
-    
-    # Define o filtro de tempo máximo: usa o 'end_datetime' fornecido (se houver)
     time_max_filter = end_datetime if end_datetime else None
 
     try:
         events_result = service.events().list(
-            calendarId="edudbs@gmail.com",
+            calendarId=CALENDAR_ID,
             timeMin=time_min_filter,
             timeMax=time_max_filter,
             maxResults=max_results,
@@ -116,20 +116,17 @@ def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_
         events = events_result.get("items", [])
         return [format_event(e) for e in events]
     except Exception as e:
-        # Se ocorrer um erro na API, retorne uma mensagem estruturada
         return [{"error": f"Erro ao listar eventos no Google Calendar: {e}"}]
 
-
-def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, timezone: str = "UTC") -> Dict:
+def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, timezone: str = USER_TIMEZONE) -> Dict:
     """
     Cria um novo compromisso na agenda do Google.
-    Os horários DEVEM ser fornecidos em formato ISO 8601 (Ex: 2024-12-01T10:00:00).
     
     Args:
         summary: O título do evento.
-        start_datetime: A data e hora de início.
-        end_datetime: A data e hora de término.
-        timezone: O fuso horário do evento (Ex: America/Sao_Paulo).
+        start_datetime: A data e hora de início (ISO 8601, local).
+        end_datetime: A data e hora de término (ISO 8601, local).
+        timezone: O fuso horário do evento (America/Sao_Paulo).
     """
     service = get_calendar_service()
     if not service:
@@ -142,13 +139,69 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
     }
 
     try:
-        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute()
+        event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
         return {"created": True, "event_id": event.get("id"), "summary": event.get("summary")}
     except Exception as e:
         return {"error": f"Erro ao criar evento: {e}"}
 
+# --- NOVA FUNÇÃO 1: EXCLUIR EVENTO ---
+def delete_calendar_event(event_id: str) -> Dict:
+    """
+    Exclui um compromisso da agenda do Google Calendar.
+    
+    Args:
+        event_id: O ID do evento a ser excluído. Este ID deve ser obtido primeiro listando os eventos.
+    """
+    service = get_calendar_service()
+    if not service:
+        return {"error": "Serviço de calendário não configurado ou inacessível."}
 
-# --- Endpoints da API ---
+    try:
+        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+        return {"deleted": True, "event_id": event_id, "message": "Evento excluído com sucesso."}
+    except Exception as e:
+        return {"error": f"Erro ao excluir evento (ID: {event_id}): {e}"}
+
+# --- NOVA FUNÇÃO 2: MODIFICAR EVENTO ---
+def modify_calendar_event(event_id: str, summary: Optional[str] = None, start_datetime: Optional[str] = None, end_datetime: Optional[str] = None, timezone: str = USER_TIMEZONE) -> Dict:
+    """
+    Modifica um compromisso existente na agenda. Pelo menos um campo deve ser fornecido para modificação.
+    
+    Args:
+        event_id: O ID do evento a ser modificado.
+        summary: (Opcional) Novo título do evento.
+        start_datetime: (Opcional) Nova data e hora de início (ISO 8601, local).
+        end_datetime: (Opcional) Nova data e hora de término (ISO 8601, local).
+        timezone: O fuso horário a ser aplicado (America/Sao_Paulo).
+    """
+    service = get_calendar_service()
+    if not service:
+        return {"error": "Serviço de calendário não configurado ou inacessível."}
+
+    try:
+        # 1. Obter o evento existente (necessário para o método 'update')
+        existing_event = service.events().get(calendarId=CALENDAR_ID, eventId=event_id).execute()
+        
+        # 2. Aplicar as alterações
+        if summary is not None:
+            existing_event['summary'] = summary
+        
+        if start_datetime is not None:
+            existing_event['start'] = {'dateTime': start_datetime, 'timeZone': timezone}
+        
+        if end_datetime is not None:
+            existing_event['end'] = {'dateTime': end_datetime, 'timeZone': timezone}
+
+        # 3. Enviar o evento atualizado
+        updated_event = service.events().update(calendarId=CALENDAR_ID, eventId=event_id, body=existing_event).execute()
+        
+        return {"modified": True, "event_id": event_id, "new_summary": updated_event.get("summary")}
+    
+    except Exception as e:
+        return {"error": f"Erro ao modificar evento (ID: {event_id}): {e}"}
+
+
+# --- Endpoints da API (sem alterações) ---
 
 @app.get("/ping")
 def ping():
@@ -196,38 +249,38 @@ def chat(query: str, token: str):
     # Calcular Data e Hora Atual (em UTC) para o Gemini
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
-    # Fuso horário seguro para o Brasil (Brasília)
-    USER_TIMEZONE = "America/Sao_Paulo" 
-    
     # ----------------------------------------------------------------------------------
-    # CORREÇÃO: INSTRUÇÃO DE SISTEMA REFORÇADA PARA TRATAR CRIAÇÃO E LISTAGEM SEPARADAMENTE
+    # ATUALIZAÇÃO: INCLUSÃO DE REGRAS PARA EXCLUSÃO E MODIFICAÇÃO
     # ----------------------------------------------------------------------------------
     system_instruction = (
-        f"Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
+        f"Você é um planejador de agenda altamente inteligente e prestativo. "
         f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " 
         f"O fuso horário local do usuário para criação de eventos é: **{USER_TIMEZONE}**."
         "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
         "Siga estas regras rigorosamente: "
         
-        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo para o formato ISO 8601. A conversão depende da função: "
+        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo para o formato ISO 8601. "
         
-        "1. **LISTAGEM ESPECÍFICA (list_calendar_events):** Se o usuário pedir eventos para um dia, **você DEVE** passar as datas no fuso horário **UTC (sufixo 'Z')** para os argumentos `start_datetime` e `end_datetime`. Ex: `2025-11-17T00:00:00Z`."
+        "1. **LISTAGEM (list_calendar_events):** Se for buscar eventos, use as datas no fuso horário **UTC (sufixo 'Z')** para `start_datetime` e `end_datetime`. Ex: `2025-11-17T00:00:00Z`."
 
-        "2. **CRIAÇÃO DE EVENTOS (add_calendar_event):** Se o usuário pedir para criar um evento, você **DEVE** passar as datas no fuso horário **local do usuário (sem sufixo Z)** para `start_datetime` e `end_datetime`. Ex: `2025-11-17T10:00:00`. Além disso, você **DEVE** passar o fuso horário local do usuário (`{USER_TIMEZONE}`) para o argumento `timezone`."
+        "2. **CRIAÇÃO (add_calendar_event):** Se for criar um evento, use a data/hora no fuso horário **local do usuário (sem sufixo Z)**, e **DEVE** passar `{USER_TIMEZONE}` para o argumento `timezone`. Ex: `2025-11-17T10:00:00` e `timezone='America/Sao_Paulo'`."
         
-        "3. **LISTAGEM GERAL:** Se o usuário pedir os próximos eventos sem especificar uma data, use **'list_calendar_events'** sem os argumentos 'start_datetime' e 'end_datetime'."
+        "3. **EXCLUSÃO E MODIFICAÇÃO:** "
+        "   a. Para **excluir** (`delete_calendar_event`) ou **modificar** (`Calendar`), você **DEVE** ter o **`event_id`**. "
+        "   b. Se o usuário pedir para alterar ou excluir um evento (Ex: 'Exclua meu evento de almoço'), mas não fornecer o ID, você **DEVE** primeiro chamar `list_calendar_events` para listar os eventos relevantes e encontrar o `event_id`. Se houver ambiguidade (vários eventos), você **DEVE** pedir ao usuário para especificar qual evento pelo horário ou título exato."
+        "   c. Para **modificar**, mantenha o fuso horário local (sem sufixo Z) e passe `{USER_TIMEZONE}` para o argumento `timezone`."
         
-        "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada."
+        "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown."
         
         "5. Mantenha um tom profissional, proativo e consultivo."
     )
     # ----------------------------------------------------------------------------------
     
-    # Ferramentas disponíveis para o modelo
-    tools = [list_calendar_events, add_calendar_event]
+    # Ferramentas disponíveis (todas)
+    tools = [list_calendar_events, add_calendar_event, delete_calendar_event, modify_calendar_event]
 
     try:
-        # 1. Primeira Chamada ao Gemini (para decidir se chama uma função)
+        # 1. Primeira Chamada ao Gemini
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=query,
@@ -240,45 +293,16 @@ def chat(query: str, token: str):
         # 2. Processar a Resposta: Checar se houve uma solicitação de Function Call
         
         if not response.function_calls:
-            # Caso 1: O modelo responde diretamente, sem usar a ferramenta.
+            # Caso 1: O modelo responde diretamente.
             return {"answer": response.text, "function_used": None}
 
-        # Caso 2: O modelo solicita uma chamada de função (Function Calling).
+        # Caso 2: O modelo solicita uma chamada de função.
         tool_call = response.function_calls[0]
         function_name = str(tool_call.name)
         
         tool_output = None
         args = dict(tool_call.args)
 
-        # Encontra e executa a função Python correspondente (usando o nome extraído)
+        # Encontra e executa a função Python correspondente
         if function_name == "list_calendar_events":
-            tool_output = list_calendar_events(**args)
-        
-        elif function_name == "add_calendar_event":
-            # Aqui, os argumentos args já contêm a hora local e o timezone correto, graças à instrução
-            tool_output = add_calendar_event(**args)
-        
-        else:
-            tool_output = {"error": f"Função desconhecida: {function_name}"}
-
-        # 3. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
-        second_response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=[
-                {"role": "user", "parts": [{"text": query}]},
-                {"role": "model", "parts": [response.candidates[0].content.parts[0]]},
-                {"role": "tool", "parts": [{"functionResponse": {"name": tool_call.name, "response": tool_output}}]}
-            ],
-            config=genai.types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools
-            )
-        )
-
-        # Retorno Final
-        return {"answer": second_response.text, "function_used": function_name}
-        
-    except APIError as e:
-        raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno do agente: {e}")
+            tool_
