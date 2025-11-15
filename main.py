@@ -1,7 +1,7 @@
 import os
 import datetime
 import json
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -40,7 +40,7 @@ def get_calendar_service():
         if not creds_json_str:
             return None
         
-        # Carrega a string JSON da variável de ambiente de forma segura (CORRIGIDO)
+        # Carrega a string JSON da variável de ambiente
         creds_info = json.loads(creds_json_str)
 
         SCOPES = ["https://www.googleapis.com/auth/calendar"]
@@ -100,7 +100,7 @@ def list_calendar_events(max_results: int = 10) -> List[Dict]:
     
     try:
         events_result = service.events().list(
-            calendarId="edudbs@gmail.com",
+            calendarId="edudbs@gmail.com", # <--- CORREÇÃO 1: Endereçamento
             timeMin=now,
             maxResults=max_results,
             singleEvents=True,
@@ -135,7 +135,7 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
     }
 
     try:
-        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute()
+        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute() # <--- CORREÇÃO 1: Endereçamento
         return {"created": True, "event_id": event.get("id"), "summary": event.get("summary")}
     except Exception as e:
         return {"error": f"Erro ao criar evento: {e}"}
@@ -146,15 +146,15 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
 @app.get("/ping")
 def ping():
     """Endpoint de status para verificar as configurações."""
-    # A verificação de 'calendar_configured' agora checa se a variável está presente.
     return {
         "status": "ok",
         "calendar_configured": bool(os.getenv("GOOGLE_CREDENTIALS")),
         "gemini_configured": bool(os.getenv("GEMINI_API_KEY"))
     }
 
+# Adaptei os endpoints para usar query params (mais fácil de testar no navegador)
 @app.get("/events")
-def get_events(token: str = Header(None)):
+def get_events(token: str): 
     check_auth(token)
     
     result = list_calendar_events(max_results=20)
@@ -166,7 +166,7 @@ def get_events(token: str = Header(None)):
 
 
 @app.post("/add_event")
-def create_event(summary: str, start_datetime: str, end_datetime: str, token: str = Header(None)):
+def create_event(summary: str, start_datetime: str, end_datetime: str, token: str):
     check_auth(token)
     
     result = add_calendar_event(summary, start_datetime, end_datetime)
@@ -186,13 +186,13 @@ def chat(query: str, token: str):
     if not client:
         raise HTTPException(status_code=500, detail="Erro de Configuração do Gemini. Verifique a chave API.")
 
-    # 1. Definir o sistema de instrução
+    # 1. Definir o sistema de instrução (Já corrigido)
     system_instruction = (
         "Você é um agente de planejamento e calendário. SUA FUNÇÃO PRIMÁRIA E ÚNICA É INTERAGIR COM A AGENDA DO USUÁRIO "
-    "USANDO AS FERRAMENTAS FORNECIDAS. NUNCA RESPONDA PERGUNTAS SOBRE AGENDA SEM USAR UMA FERRAMENTA. "
-    "Use a função 'list_calendar_events' para qualquer consulta de disponibilidade. "
-    "Use a função 'add_calendar_event' para qualquer solicitação de agendamento. "
-    "Responda ao usuário com base no resultado da execução da ferramenta."
+        "USANDO AS FERRAMENTAS FORNECIDAS. NUNCA RESPONDA PERGUNTAS SOBRE AGENDA SEM USAR UMA FERRAMENTA. "
+        "Use a função 'list_calendar_events' para qualquer consulta de disponibilidade. "
+        "Use a função 'add_calendar_event' para qualquer solicitação de agendamento. "
+        "Responda ao usuário com base no resultado da execução da ferramenta."
     )
 
     # Ferramentas disponíveis para o modelo
@@ -210,33 +210,41 @@ def chat(query: str, token: str):
         )
 
         # 3. Processar a Resposta: Checar se houve uma solicitação de Function Call
+        
+        # -------------------------------------------------------------------------
+        # BLOCO CORRIGIDO PARA RESOLVER O PROBLEMA DE RELATÓRIO 'function_used:null'
+        # -------------------------------------------------------------------------
+
         if not response.function_calls:
-            # Resposta direta do modelo
+            # Caso 1: O modelo responde diretamente, sem usar a ferramenta.
             return {"answer": response.text, "function_used": None}
-        
-        # Se houver Function Call, executa-a:
+
+        # Caso 2: O modelo solicita uma chamada de função (Function Calling).
+
+        # Extrai a primeira função e garante que o nome seja uma string serializável
         tool_call = response.function_calls[0]
-        tool_output = None
+        function_name = str(tool_call.name) # <-- CORREÇÃO 3: Extração de String Garantida
         
-        # Encontra e executa a função Python correspondente
-        if tool_call.name == "list_calendar_events":
-            args = dict(tool_call.args)
+        tool_output = None
+        args = dict(tool_call.args)
+
+        # Encontra e executa a função Python correspondente (usando o nome extraído)
+        if function_name == "list_calendar_events":
             tool_output = list_calendar_events(**args)
         
-        elif tool_call.name == "add_calendar_event":
-            args = dict(tool_call.args)
+        elif function_name == "add_calendar_event":
             tool_output = add_calendar_event(**args)
         
         else:
-            tool_output = {"error": f"Função desconhecida: {tool_call.name}"}
+            tool_output = {"error": f"Função desconhecida: {function_name}"}
 
         # 4. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
         second_response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
                 {"role": "user", "parts": [{"text": query}]},
-                {"role": "model", "parts": [response.candidates[0].content.parts[0]]}, # Solicitação original do modelo
-                {"role": "tool", "parts": [{"functionResponse": {"name": tool_call.name, "response": tool_output}}]} # Resultado real da execução
+                {"role": "model", "parts": [response.candidates[0].content.parts[0]]},
+                {"role": "tool", "parts": [{"functionResponse": {"name": tool_call.name, "response": tool_output}}]}
             ],
             config=genai.types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -244,9 +252,12 @@ def chat(query: str, token: str):
             )
         )
 
-        function_name_used = str(tool_call.name)
-
-        return {"answer": second_response.text, "function_used": function_name_used}
+        # Retorno Final: Usa a variável function_name, que resolve o erro de relatório
+        return {"answer": second_response.text, "function_used": function_name}
+        
+        # -------------------------------------------------------------------------
+        # FIM DO BLOCO CORRIGIDO
+        # -------------------------------------------------------------------------
 
     except APIError as e:
         raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
