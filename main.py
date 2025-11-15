@@ -205,6 +205,7 @@ def chat(query: str, token: str):
         "2. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas. "
         "3. Ao planejar ou sugerir, use a lista de eventos para identificar lacunas de tempo livre. "
         "4. Mantenha um tom profissional, proativo e consultivo."
+        "5. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada. NUNCA use parágrafos longos para listas."
     )
     # ----------------------------------------------------------------------------------
     
