@@ -244,7 +244,9 @@ def chat(query: str, token: str):
             )
         )
 
-        return {"answer": second_response.text, "function_used": tool_call.name}
+        function_name_used = str(tool_call.name)
+
+        return {"answer": second_response.text, "function_used": function_name_used}
 
     except APIError as e:
         raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
