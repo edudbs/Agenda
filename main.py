@@ -83,25 +83,34 @@ def format_event(e: Dict) -> Dict:
         "start": start
     }
 
-def list_calendar_events(max_results: int = 10) -> List[Dict]:
+# ----------------------------------------------------------------------------------
+# MUDANÇA 1: list_calendar_events AGORA ACEITA DATAS DE INÍCIO E FIM PARA FILTRAGEM
+# ----------------------------------------------------------------------------------
+def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_datetime: str = None) -> List[Dict]:
     """
-    Lista os próximos compromissos da agenda do usuário.
-    Use esta função para verificar a disponibilidade atual do usuário.
+    Lista os próximos compromissos da agenda do usuário, opcionalmente filtrando por um intervalo de datas.
+    Use esta função para verificar a disponibilidade atual do usuário ou para listar eventos de um dia específico.
     
     Args:
         max_results: O número máximo de eventos a serem listados.
+        start_datetime: (Opcional) A data e hora de início do intervalo de pesquisa no formato ISO 8601.
+        end_datetime: (Opcional) A data e hora de fim do intervalo de pesquisa no formato ISO 8601.
     """
     service = get_calendar_service()
     if not service:
-        # Retorna erro que o Gemini pode interpretar.
         return [{"error": "Serviço de calendário não configurado ou inacessível."}] 
 
-    now = datetime.datetime.utcnow().isoformat() + "Z"
+    # Define o filtro de tempo mínimo: usa o 'start_datetime' fornecido ou o momento atual (se nenhum for fornecido)
+    time_min_filter = start_datetime if start_datetime else (datetime.datetime.utcnow().isoformat() + "Z")
     
+    # Define o filtro de tempo máximo: usa o 'end_datetime' fornecido (se houver)
+    time_max_filter = end_datetime if end_datetime else None
+
     try:
         events_result = service.events().list(
             calendarId="edudbs@gmail.com",
-            timeMin=now,
+            timeMin=time_min_filter,
+            timeMax=time_max_filter, # Adicionado timeMax para o filtro de intervalo
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime"
@@ -185,35 +194,41 @@ def chat(query: str, token: str):
     if not client:
         raise HTTPException(status_code=500, detail="Erro de Configuração do Gemini. Verifique a chave API.")
 
+    
     # ----------------------------------------------------------------------------------
-    # CORREÇÃO 1: INJEÇÃO DE DATA/HORA ATUAL E NOVA INSTRUÇÃO DE SISTEMA PARA TEMPO RELATIVO
+    # MUDANÇA 2: INSTRUÇÃO ATUALIZADA PARA INCLUIR A NOVA LÓGICA DE FILTRAGEM
     # ----------------------------------------------------------------------------------
     
     # Calcular Data e Hora Atual (em UTC) para o Gemini
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
-    # 1. Definir o sistema de instrução (Inteligência e Formato)
+    # Definir o sistema de instrução (Inteligência e Formato)
     system_instruction = (
         f"Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
-        f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " # <--- CONTEXTO DE DATA/HORA
+        f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " 
         "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
         "Siga estas regras rigorosamente: "
         
-        "**REGRA CHAVE:** Antes de chamar 'add_calendar_event', você deve converter **TODAS** as referências de tempo (hoje, amanhã, próxima semana, etc.) para o formato ISO 8601 completo (Ex: 2025-11-15T17:30:00). Você **nunca** deve passar palavras como 'amanhã' ou 'hoje' nos argumentos de tempo."
+        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo (hoje, amanhã, próxima segunda-feira, etc.) para o formato ISO 8601 completo (Ex: 2025-11-15T17:30:00). Você **NUNCA** deve passar palavras como 'amanhã' nos argumentos de tempo."
         
-        "1. SEMPRE use a função 'list_calendar_events' ao planejar, sugerir ou resumir o dia/semana do usuário. "
-        "2. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas. "
-        "3. Ao planejar ou sugerir, use a lista de eventos para identificar lacunas de tempo livre. "
-        "4. Mantenha um tom profissional, proativo e consultivo."
-        "5. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada. NUNCA use parágrafos longos para listas."
+        "1. **LISTAGEM ESPECÍFICA:** Se o usuário pedir eventos para um dia específico (Ex: 'próxima segunda-feira', 'amanhã'), use a função **'list_calendar_events'** passando o **início desse dia (00:00:00)** como **'start_datetime'** e o **fim desse dia (23:59:59)** como **'end_datetime'**."
+        
+        "2. **LISTAGEM GERAL:** Se o usuário pedir os próximos eventos sem especificar uma data, use **'list_calendar_events'** sem os argumentos 'start_datetime' e 'end_datetime'."
+        
+        "3. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas."
+        
+        "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada."
+        
+        "5. Mantenha um tom profissional, proativo e consultivo."
     )
+    
     # ----------------------------------------------------------------------------------
     
     # Ferramentas disponíveis para o modelo
     tools = [list_calendar_events, add_calendar_event]
 
     try:
-        # 2. Primeira Chamada ao Gemini (para decidir se chama uma função)
+        # 1. Primeira Chamada ao Gemini (para decidir se chama uma função)
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=query,
@@ -223,21 +238,15 @@ def chat(query: str, token: str):
             )
         )
 
-        # 3. Processar a Resposta: Checar se houve uma solicitação de Function Call
+        # 2. Processar a Resposta: Checar se houve uma solicitação de Function Call
         
-        # -------------------------------------------------------------------------
-        # CORREÇÃO 2: BLOCO CORRIGIDO PARA RESOLVER O PROBLEMA DE RELATÓRIO 'function_used:null'
-        # -------------------------------------------------------------------------
-
         if not response.function_calls:
             # Caso 1: O modelo responde diretamente, sem usar a ferramenta.
             return {"answer": response.text, "function_used": None}
 
         # Caso 2: O modelo solicita uma chamada de função (Function Calling).
-
-        # Extrai a primeira função e garante que o nome seja uma string serializável
         tool_call = response.function_calls[0]
-        function_name = str(tool_call.name) # <--- GARANTIA DE STRING SIMPLES
+        function_name = str(tool_call.name)
         
         tool_output = None
         args = dict(tool_call.args)
@@ -252,7 +261,7 @@ def chat(query: str, token: str):
         else:
             tool_output = {"error": f"Função desconhecida: {function_name}"}
 
-        # 4. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
+        # 3. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
         second_response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -266,15 +275,10 @@ def chat(query: str, token: str):
             )
         )
 
-        # Retorno Final: Usa a variável function_name, que resolve o erro de relatório
+        # Retorno Final
         return {"answer": second_response.text, "function_used": function_name}
         
-        # -------------------------------------------------------------------------
-        # FIM DO BLOCO CORRIGIDO
-        # -------------------------------------------------------------------------
-
     except APIError as e:
         raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
     except Exception as e:
-        # Erro genérico de execução ou Service Account/Calendar API
         raise HTTPException(status_code=500, detail=f"Erro interno do agente: {e}")
