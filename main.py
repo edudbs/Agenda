@@ -100,7 +100,7 @@ def list_calendar_events(max_results: int = 10) -> List[Dict]:
     
     try:
         events_result = service.events().list(
-            calendarId="primary",
+            calendarId="edudbs@gmail.com",
             timeMin=now,
             maxResults=max_results,
             singleEvents=True,
@@ -135,7 +135,7 @@ def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, tim
     }
 
     try:
-        event = service.events().insert(calendarId="primary", body=event_body).execute()
+        event = service.events().insert(calendarId="edudbs@gmail.com", body=event_body).execute()
         return {"created": True, "event_id": event.get("id"), "summary": event.get("summary")}
     except Exception as e:
         return {"error": f"Erro ao criar evento: {e}"}
