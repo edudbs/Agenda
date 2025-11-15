@@ -83,9 +83,6 @@ def format_event(e: Dict) -> Dict:
         "start": start
     }
 
-# ----------------------------------------------------------------------------------
-# MUDANÇA 1: list_calendar_events AGORA ACEITA DATAS DE INÍCIO E FIM PARA FILTRAGEM
-# ----------------------------------------------------------------------------------
 def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_datetime: str = None) -> List[Dict]:
     """
     Lista os próximos compromissos da agenda do usuário, opcionalmente filtrando por um intervalo de datas.
@@ -93,8 +90,8 @@ def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_
     
     Args:
         max_results: O número máximo de eventos a serem listados.
-        start_datetime: (Opcional) A data e hora de início do intervalo de pesquisa no formato ISO 8601.
-        end_datetime: (Opcional) A data e hora de fim do intervalo de pesquisa no formato ISO 8601.
+        start_datetime: (Opcional) A data e hora de início do intervalo de pesquisa no formato ISO 8601 (Ex: 2025-11-17T00:00:00Z).
+        end_datetime: (Opcional) A data e hora de fim do intervalo de pesquisa no formato ISO 8601 (Ex: 2025-11-17T23:59:59Z).
     """
     service = get_calendar_service()
     if not service:
@@ -110,7 +107,7 @@ def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_
         events_result = service.events().list(
             calendarId="edudbs@gmail.com",
             timeMin=time_min_filter,
-            timeMax=time_max_filter, # Adicionado timeMax para o filtro de intervalo
+            timeMax=time_max_filter,
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime"
@@ -119,7 +116,8 @@ def list_calendar_events(max_results: int = 10, start_datetime: str = None, end_
         events = events_result.get("items", [])
         return [format_event(e) for e in events]
     except Exception as e:
-        return [{"error": f"Erro ao listar eventos: {e}"}]
+        # Se ocorrer um erro na API, retorne uma mensagem estruturada
+        return [{"error": f"Erro ao listar eventos no Google Calendar: {e}"}]
 
 
 def add_calendar_event(summary: str, start_datetime: str, end_datetime: str, timezone: str = "UTC") -> Dict:
@@ -195,33 +193,32 @@ def chat(query: str, token: str):
         raise HTTPException(status_code=500, detail="Erro de Configuração do Gemini. Verifique a chave API.")
 
     
-    # ----------------------------------------------------------------------------------
-    # MUDANÇA 2: INSTRUÇÃO ATUALIZADA PARA INCLUIR A NOVA LÓGICA DE FILTRAGEM
-    # ----------------------------------------------------------------------------------
-    
     # Calcular Data e Hora Atual (em UTC) para o Gemini
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
-    # Definir o sistema de instrução (Inteligência e Formato)
+    # ----------------------------------------------------------------------------------
+    # CORREÇÃO: INSTRUÇÃO DE SISTEMA REFORÇADA PARA O FORMATO ISO 8601 COM Z
+    # ----------------------------------------------------------------------------------
     system_instruction = (
         f"Você é um planejador de agenda altamente inteligente e prestativo, especializado em otimizar o tempo do usuário. "
         f"A data e hora atual do sistema (UTC) são: **{now_utc}**. " 
         "Sua função principal é manipular e analisar a agenda do Google Calendar do usuário. "
         "Siga estas regras rigorosamente: "
         
-        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo (hoje, amanhã, próxima segunda-feira, etc.) para o formato ISO 8601 completo (Ex: 2025-11-15T17:30:00). Você **NUNCA** deve passar palavras como 'amanhã' nos argumentos de tempo."
+        "**REGRA CHAVE DE DATA/TEMPO:** Converta TODAS as referências de tempo (incluindo datas relativas) para o formato ISO 8601 completo com fuso horário **UTC (sufixo 'Z')**. Ex: `2025-11-17T17:30:00Z`."
         
-        "1. **LISTAGEM ESPECÍFICA:** Se o usuário pedir eventos para um dia específico (Ex: 'próxima segunda-feira', 'amanhã'), use a função **'list_calendar_events'** passando o **início desse dia (00:00:00)** como **'start_datetime'** e o **fim desse dia (23:59:59)** como **'end_datetime'**."
+        "1. **LISTAGEM ESPECÍFICA:** Se o usuário pedir eventos para um dia (Ex: 'próxima segunda-feira', 'amanhã'), você **DEVE** chamar `list_calendar_events` definindo o intervalo exato: "
+        "   - `start_datetime`: Início do dia, formatado como **YYYY-MM-DDT00:00:00Z**."
+        "   - `end_datetime`: Fim do dia, formatado como **YYYY-MM-DDT23:59:59Z**."
         
         "2. **LISTAGEM GERAL:** Se o usuário pedir os próximos eventos sem especificar uma data, use **'list_calendar_events'** sem os argumentos 'start_datetime' e 'end_datetime'."
         
-        "3. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas."
+        "3. Use a função 'add_calendar_event' apenas para agendar novos compromissos, garantindo que a data e hora estejam completas (e com o sufixo Z, se UTC)."
         
         "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas) para que cada item ou sugestão ocupe uma linha separada."
         
         "5. Mantenha um tom profissional, proativo e consultivo."
     )
-    
     # ----------------------------------------------------------------------------------
     
     # Ferramentas disponíveis para o modelo
