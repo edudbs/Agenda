@@ -4,6 +4,9 @@ google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-openai
-python-dotenv
+# DEPENDÊNCIA CORRETA PARA O GEMINI SDK
+google-genai 
+# python-dotenv é útil para desenvolvimento local, mas o Render já usa env vars
+python-dotenv 
 requests
+# A dependência 'openai' foi removida, pois você migrou para o Gemini
