@@ -201,7 +201,7 @@ def modify_calendar_event(event_id: str, summary: Optional[str] = None, start_da
         return {"error": f"Erro ao modificar evento (ID: {event_id}): {e}"}
 
 
-# --- Endpoints da API (sem alterações) ---
+# --- Endpoints da API ---
 
 @app.get("/ping")
 def ping():
@@ -250,7 +250,7 @@ def chat(query: str, token: str):
     now_utc = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
     
     # ----------------------------------------------------------------------------------
-    # ATUALIZAÇÃO: INCLUSÃO DE REGRAS PARA EXCLUSÃO E MODIFICAÇÃO
+    # INSTRUÇÕES DE SISTEMA CORRIGIDAS E COMPLETAS
     # ----------------------------------------------------------------------------------
     system_instruction = (
         f"Você é um planejador de agenda altamente inteligente e prestativo. "
@@ -267,10 +267,10 @@ def chat(query: str, token: str):
         
         "3. **EXCLUSÃO E MODIFICAÇÃO:** "
         "   a. Para **excluir** (`delete_calendar_event`) ou **modificar** (`Calendar`), você **DEVE** ter o **`event_id`**. "
-        "   b. Se o usuário pedir para alterar ou excluir um evento (Ex: 'Exclua meu evento de almoço'), mas não fornecer o ID, você **DEVE** primeiro chamar `list_calendar_events` para listar os eventos relevantes e encontrar o `event_id`. Se houver ambiguidade (vários eventos), você **DEVE** pedir ao usuário para especificar qual evento pelo horário ou título exato."
+        "   b. Se o usuário pedir para alterar ou excluir um evento, mas não fornecer o ID, você **DEVE** primeiro chamar `list_calendar_events` para listar os eventos relevantes e encontrar o `event_id`. Se houver ambiguidade, peça ao usuário para especificar qual evento pelo horário ou título exato."
         "   c. Para **modificar**, mantenha o fuso horário local (sem sufixo Z) e passe `{USER_TIMEZONE}` para o argumento `timezone`."
         
-        "4. Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown."
+        "4. **Formatação de Saída:** Ao listar compromissos ou sugerir planos, formate o resultado usando estritamente listas de Markdown (itemize ou numeradas)."
         
         "5. Mantenha um tom profissional, proativo e consultivo."
     )
@@ -305,4 +305,40 @@ def chat(query: str, token: str):
 
         # Encontra e executa a função Python correspondente
         if function_name == "list_calendar_events":
-            tool_
+            tool_output = list_calendar_events(**args)
+        
+        elif function_name == "add_calendar_event":
+            tool_output = add_calendar_event(**args)
+        
+        elif function_name == "delete_calendar_event":
+            tool_output = delete_calendar_event(**args)
+            
+        elif function_name == "modify_calendar_event":
+            tool_output = modify_calendar_event(**args)
+        
+        else:
+            tool_output = {"error": f"Função desconhecida: {function_name}"}
+
+        # 3. Segunda Chamada ao Gemini (Feed de volta do resultado da função)
+        second_response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                {"role": "user", "parts": [{"text": query}]},
+                {"role": "model", "parts": [response.candidates[0].content.parts[0]]},
+                {"role": "tool", "parts": [{"functionResponse": {"name": tool_call.name, "response": tool_output}}]}
+            ],
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=tools
+            )
+        )
+
+        # Retorno Final
+        return {"answer": second_response.text, "function_used": function_name}
+        
+    except APIError as e:
+        # Tratamento de erro da API do Google Gemini
+        raise HTTPException(status_code=500, detail=f"Erro na API do Gemini: {e}")
+    except Exception as e:
+        # Tratamento de erro interno ou genérico
+        raise HTTPException(status_code=500, detail=f"Erro interno do agente: {e}")
