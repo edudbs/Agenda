@@ -2,9 +2,10 @@ import os
 import datetime
 import json
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddlewarefro
+from fastapi.middleware.cors import CORSMiddleware
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import Flow
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google import genai
 from google.genai.errors import APIError
