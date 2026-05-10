@@ -10,6 +10,9 @@ from google.genai.errors import APIError
 from typing import List, Dict, Optional
 # Importação necessária para lidar com o histórico de conversas
 from google.genai.types import Content, Part 
+from fastapi import Request
+import requests
+import os
 
 # --- Inicialização ---
 
@@ -397,3 +400,34 @@ def chat(query: str, token: str, history: Optional[str] = None):
              except Exception:
                  pass
         raise HTTPException(status_code=500, detail=f"Erro interno do agente: {error_detail}")
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+@app.post("/telegram")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+
+    try:
+        message = data["message"]["text"]
+        chat_id = data["message"]["chat"]["id"]
+
+        client = get_gemini_client()
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=message
+        )
+
+        reply = response.text
+
+        send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+
+        requests.post(send_url, json={
+            "chat_id": chat_id,
+            "text": reply
+        })
+
+        return {"status": "ok"}
+
+    except Exception as e:
+        return {"error": str(e)}
