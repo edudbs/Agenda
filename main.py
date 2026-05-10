@@ -144,6 +144,7 @@ def build_google_flow():
     )
     
     flow.redirect_uri = REDIRECT_URI
+    return flow
 
 
 @app.get("/authorize")
