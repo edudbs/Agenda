@@ -128,7 +128,7 @@ def build_google_flow():
             status_code=500,
             detail="GOOGLE_CLIENT_ID ou GOOGLE_CLIENT_SECRET ausente no Render.",
         )
-
+     
     flow = Flow.from_client_config(
         {
             "web": {
@@ -136,12 +136,14 @@ def build_google_flow():
                 "client_secret": GOOGLE_CLIENT_SECRET,
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [REDIRECT_URI],
             }
         },
         scopes=SCOPES,
+        autogenerate_code_verifier=False
     )
+    
     flow.redirect_uri = REDIRECT_URI
-    return flow
 
 
 @app.get("/authorize")
