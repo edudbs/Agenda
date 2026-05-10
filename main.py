@@ -405,29 +405,28 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 @app.post("/telegram")
 async def telegram_webhook(request: Request):
+
     data = await request.json()
+
+    print("TELEGRAM DATA:", data)
 
     try:
         message = data["message"]["text"]
         chat_id = data["message"]["chat"]["id"]
 
-        client = get_gemini_client()
-
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=message
-        )
-
-        reply = response.text
+        print("MESSAGE:", message)
 
         send_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-        requests.post(send_url, json={
+        response = requests.post(send_url, json={
             "chat_id": chat_id,
-            "text": reply
+            "text": f"Recebi sua mensagem: {message}"
         })
+
+        print("TELEGRAM RESPONSE:", response.text)
 
         return {"status": "ok"}
 
     except Exception as e:
+        print("ERRO:", str(e))
         return {"error": str(e)}
