@@ -14,6 +14,7 @@ from config import (
     OPENROUTER_APP_NAME,
     USER_TIMEZONE,
 )
+from services.datetime_service import coerce_calendar_args
 
 
 def build_system_prompt() -> str:
@@ -31,6 +32,8 @@ def build_system_prompt() -> str:
         "Para perguntas sobre 'hoje', use a data local informada acima. "
         "Para listar eventos, use datas em UTC com sufixo Z. "
         "Para criar ou modificar eventos, use data/hora local no formato ISO, sem sufixo Z. "
+        "NUNCA converta automaticamente horários da manhã para tarde. "
+        "Se o usuário disser 5:00, interprete como 05:00, salvo indicação explícita de tarde/noite. "
         "Se houver ambiguidade, pergunte antes de alterar ou excluir eventos."
     )
 
@@ -157,6 +160,7 @@ def parse_text_tool_call(content: str) -> Optional[Tuple[str, Dict]]:
         else:
             args[param_name] = value
 
+    args = coerce_calendar_args(function_name, args)
     return function_name, args
 
 
@@ -176,17 +180,8 @@ def execute_text_tool_call(content: str, tool_handlers: Optional[Dict]) -> Optio
 
     tool_output = handler(**args)
 
-    if isinstance(tool_output, dict) and tool_output.get("created"):
-        answer = f"Evento criado com sucesso: {tool_output.get('summary', 'Sem título')}"
-    elif isinstance(tool_output, dict) and tool_output.get("modified"):
-        answer = f"Evento modificado com sucesso: {tool_output.get('summary', 'Sem título')}"
-    elif isinstance(tool_output, dict) and tool_output.get("deleted"):
-        answer = "Evento excluído com sucesso."
-    else:
-        answer = json.dumps(tool_output, ensure_ascii=False)
-
     return {
-        "answer": answer,
+        "answer": json.dumps(tool_output, ensure_ascii=False),
         "function_used": function_name,
         "provider": "openrouter",
         "tool_output": tool_output,
@@ -238,6 +233,7 @@ def generate_openrouter_answer(
         function_name = tool_call["function"]["name"]
         raw_args = tool_call["function"].get("arguments") or "{}"
         args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        args = coerce_calendar_args(function_name, args)
 
         handler = (tool_handlers or {}).get(function_name)
         if not handler:
@@ -245,25 +241,8 @@ def generate_openrouter_answer(
         else:
             tool_output = handler(**args)
 
-        messages.append(message)
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": tool_call["id"],
-                "name": function_name,
-                "content": json.dumps(tool_output, ensure_ascii=False),
-            }
-        )
-
-        second_payload = {
-            "model": OPENROUTER_MODEL,
-            "messages": messages,
-        }
-        second_data = post_chat_completion(second_payload)
-        second_message = second_data["choices"][0]["message"]
-
         return {
-            "answer": second_message.get("content") or str(tool_output),
+            "answer": json.dumps(tool_output, ensure_ascii=False),
             "function_used": function_name,
             "provider": "openrouter",
         }
