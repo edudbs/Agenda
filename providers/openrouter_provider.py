@@ -2,7 +2,7 @@ import datetime
 import json
 import re
 import requests
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -138,6 +138,65 @@ def post_chat_completion(payload: Dict) -> Dict:
     return response.json()
 
 
+def format_datetime_for_user(value: Optional[str]) -> str:
+    if not value:
+        return ""
+
+    try:
+        cleaned = value.replace("Z", "+00:00")
+        parsed = datetime.datetime.fromisoformat(cleaned)
+        return parsed.strftime("%d/%m/%Y às %H:%M")
+    except Exception:
+        return value
+
+
+def format_events(events: List[Dict]) -> str:
+    if not events:
+        return "Não encontrei compromissos nesse período."
+
+    if events and "error" in events[0]:
+        return events[0]["error"]
+
+    lines = ["Encontrei estes compromissos:"]
+    for event in events:
+        summary = event.get("summary", "Sem título")
+        start = format_datetime_for_user(event.get("start"))
+        end = format_datetime_for_user(event.get("end"))
+
+        if start and end:
+            lines.append(f"- {summary}: {start} até {end}")
+        elif start:
+            lines.append(f"- {summary}: {start}")
+        else:
+            lines.append(f"- {summary}")
+
+    return "\n".join(lines)
+
+
+def format_tool_response(function_name: str, tool_output) -> str:
+    if isinstance(tool_output, dict) and tool_output.get("error"):
+        return tool_output["error"]
+
+    if function_name == "add_calendar_event" and isinstance(tool_output, dict):
+        if tool_output.get("created"):
+            summary = tool_output.get("summary", "evento")
+            return f"Pronto, criei o evento “{summary}” na sua agenda."
+
+    if function_name == "modify_calendar_event" and isinstance(tool_output, dict):
+        if tool_output.get("modified"):
+            summary = tool_output.get("summary", "evento")
+            return f"Pronto, atualizei o evento “{summary}”."
+
+    if function_name == "delete_calendar_event" and isinstance(tool_output, dict):
+        if tool_output.get("deleted"):
+            return "Pronto, excluí o evento da sua agenda."
+
+    if function_name == "list_calendar_events" and isinstance(tool_output, list):
+        return format_events(tool_output)
+
+    return json.dumps(tool_output, ensure_ascii=False)
+
+
 def parse_text_tool_call(content: str) -> Optional[Tuple[str, Dict]]:
     if not content or "<tool_call>" not in content:
         return None
@@ -181,7 +240,7 @@ def execute_text_tool_call(content: str, tool_handlers: Optional[Dict]) -> Optio
     tool_output = handler(**args)
 
     return {
-        "answer": json.dumps(tool_output, ensure_ascii=False),
+        "answer": format_tool_response(function_name, tool_output),
         "function_used": function_name,
         "provider": "openrouter",
         "tool_output": tool_output,
@@ -242,9 +301,10 @@ def generate_openrouter_answer(
             tool_output = handler(**args)
 
         return {
-            "answer": json.dumps(tool_output, ensure_ascii=False),
+            "answer": format_tool_response(function_name, tool_output),
             "function_used": function_name,
             "provider": "openrouter",
+            "tool_output": tool_output,
         }
 
     except HTTPException:
