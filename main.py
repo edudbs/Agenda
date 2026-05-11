@@ -13,6 +13,7 @@ from config import (
     GOOGLE_CREDENTIALS,
     CALENDAR_ID,
     GEMINI_MODEL,
+    LLM_PROVIDER,
 )
 
 from auth import check_auth, build_google_flow
@@ -22,7 +23,7 @@ from services.calendar_write_service import (
     delete_calendar_event,
     modify_calendar_event,
 )
-from services.gemini_service import generate_agent_answer as generate_gemini_answer
+from services.llm_service import generate_llm_answer
 from services.memory_service import (
     add_memory,
     build_memory_context,
@@ -81,7 +82,7 @@ def oauth_callback(code: str):
 
 
 # -----------------------------------------------------------------------------
-# Agente Gemini
+# Agente
 # -----------------------------------------------------------------------------
 
 def generate_agent_answer(query: str, history: Optional[str] = None) -> Dict:
@@ -107,13 +108,20 @@ def generate_agent_answer(query: str, history: Optional[str] = None) -> Dict:
         delete_calendar_event,
         modify_calendar_event,
     ]
+
     tool_handlers = {
         "list_calendar_events": list_calendar_events,
         "add_calendar_event": add_calendar_event,
         "delete_calendar_event": delete_calendar_event,
         "modify_calendar_event": modify_calendar_event,
     }
-    return generate_gemini_answer(enriched_query, history, tools, tool_handlers)
+
+    return generate_llm_answer(
+        enriched_query,
+        history,
+        tools,
+        tool_handlers,
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -129,6 +137,7 @@ def health_check():
 def ping():
     return {
         "status": "ok",
+        "provider": LLM_PROVIDER,
         "calendar_configured": bool((GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN) or GOOGLE_CREDENTIALS),
         "gemini_configured": bool(GEMINI_API_KEY),
         "telegram_configured": bool(TELEGRAM_TOKEN),
