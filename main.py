@@ -23,6 +23,11 @@ from services.calendar_write_service import (
     modify_calendar_event,
 )
 from services.gemini_service import generate_agent_answer as generate_gemini_answer
+from services.memory_service import (
+    add_memory,
+    build_memory_context,
+    extract_explicit_memory,
+)
 from services.telegram_service import send_telegram_message
 
 
@@ -80,6 +85,22 @@ def oauth_callback(code: str):
 # -----------------------------------------------------------------------------
 
 def generate_agent_answer(query: str, history: Optional[str] = None) -> Dict:
+    explicit_memory = extract_explicit_memory(query)
+    if explicit_memory:
+        result = add_memory(explicit_memory)
+        if "error" in result:
+            return {"answer": result["error"], "function_used": "add_memory"}
+        return {
+            "answer": "Memória salva com sucesso.",
+            "function_used": "add_memory",
+            "memory": result,
+        }
+
+    memory_context = build_memory_context(query)
+    enriched_query = query
+    if memory_context:
+        enriched_query = f"{memory_context}\n\nMensagem atual do usuário:\n{query}"
+
     tools = [
         list_calendar_events,
         add_calendar_event,
@@ -92,7 +113,7 @@ def generate_agent_answer(query: str, history: Optional[str] = None) -> Dict:
         "delete_calendar_event": delete_calendar_event,
         "modify_calendar_event": modify_calendar_event,
     }
-    return generate_gemini_answer(query, history, tools, tool_handlers)
+    return generate_gemini_answer(enriched_query, history, tools, tool_handlers)
 
 
 # -----------------------------------------------------------------------------
