@@ -116,6 +116,11 @@ def ping():
     }
 
 
+@app.head("/ping")
+def ping_head():
+    return {"status": "ok"}
+
+
 @app.get("/events")
 def get_events(token: str, max_results: int = 20):
     check_auth(token)
