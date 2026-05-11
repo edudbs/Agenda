@@ -6,7 +6,11 @@ from typing import Dict, List
 
 from google import genai
 
-from config import GEMINI_API_KEY, GEMINI_EMBEDDING_MODEL
+from config import (
+    ENABLE_MEMORY_EMBEDDINGS,
+    GEMINI_API_KEY,
+    GEMINI_EMBEDDING_MODEL,
+)
 
 
 MEMORY_DB_PATH = os.getenv("MEMORY_DB_PATH", "agenda_memory.db")
@@ -19,8 +23,12 @@ def get_connection():
 
 
 def get_embedding_client():
+    if not ENABLE_MEMORY_EMBEDDINGS:
+        return None
+
     if not GEMINI_API_KEY:
         return None
+
     try:
         return genai.Client(api_key=GEMINI_API_KEY)
     except Exception:
@@ -117,6 +125,9 @@ def list_memories(limit: int = 20) -> List[Dict]:
 
 
 def semantic_search_memories(query: str, limit: int = 5) -> List[Dict]:
+    if not ENABLE_MEMORY_EMBEDDINGS:
+        return []
+
     query_embedding = generate_embedding(query)
     if not query_embedding:
         return []
