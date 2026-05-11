@@ -1,4 +1,3 @@
-import os
 import json
 import datetime
 from typing import List, Dict, Optional
@@ -15,7 +14,21 @@ from google.genai.types import Content, Part
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
+
+from config import (
+    GEMINI_API_KEY,
+    TELEGRAM_TOKEN,
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REFRESH_TOKEN,
+    GOOGLE_CREDENTIALS,
+    SCOPES,
+    CALENDAR_ID,
+    USER_TIMEZONE,
+    GEMINI_MODEL,
+)
+
+from auth import check_auth, build_google_flow
 
 
 # -----------------------------------------------------------------------------
@@ -31,39 +44,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# -----------------------------------------------------------------------------
-# Variáveis de ambiente
-# -----------------------------------------------------------------------------
-
-API_TOKEN = os.getenv("API_TOKEN", "changeme")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN")
-GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")  # opcional: service account
-
-BASE_URL = os.getenv("BASE_URL", "https://agente-planejamento.onrender.com").rstrip("/")
-REDIRECT_URI = f"{BASE_URL}/oauth/callback"
-
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
-CALENDAR_ID = os.getenv("CALENDAR_ID", "primary")
-USER_TIMEZONE = os.getenv("USER_TIMEZONE", "America/Sao_Paulo")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-
-# -----------------------------------------------------------------------------
-# Autenticação simples
-# -----------------------------------------------------------------------------
-
-def check_auth(token: str):
-    if token != API_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # -----------------------------------------------------------------------------
@@ -116,35 +96,6 @@ def get_calendar_service():
     except Exception as e:
         print(f"Erro Calendar ao construir serviço: {e}")
         return None
-
-
-# -----------------------------------------------------------------------------
-# OAuth Google Calendar
-# -----------------------------------------------------------------------------
-
-def build_google_flow():
-    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-        raise HTTPException(
-            status_code=500,
-            detail="GOOGLE_CLIENT_ID ou GOOGLE_CLIENT_SECRET ausente no Render.",
-        )
-     
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [REDIRECT_URI],
-            }
-        },
-        scopes=SCOPES,
-        autogenerate_code_verifier=False
-    )
-    
-    flow.redirect_uri = REDIRECT_URI
-    return flow
 
 
 @app.get("/authorize")
