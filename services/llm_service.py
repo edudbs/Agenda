@@ -12,6 +12,10 @@ def generate_llm_answer(
     tool_handlers: Dict,
 ) -> Dict:
     if LLM_PROVIDER == "openrouter":
-        return generate_openrouter_answer(query, history)
+        return generate_openrouter_answer(
+            query=query,
+            history=history,
+            tool_handlers=tool_handlers,
+        )
 
     return generate_gemini_answer(query, history, tools, tool_handlers)
