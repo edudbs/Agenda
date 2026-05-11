@@ -1,14 +1,8 @@
-import json
-import datetime
-from typing import List, Dict, Optional
+from typing import Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
-
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
-from google.oauth2.credentials import Credentials
 
 from config import (
     GEMINI_API_KEY,
@@ -17,13 +11,17 @@ from config import (
     GOOGLE_CLIENT_SECRET,
     GOOGLE_REFRESH_TOKEN,
     GOOGLE_CREDENTIALS,
-    SCOPES,
     CALENDAR_ID,
-    USER_TIMEZONE,
     GEMINI_MODEL,
 )
 
 from auth import check_auth, build_google_flow
+from services.calendar_service import list_calendar_events
+from services.calendar_write_service import (
+    add_calendar_event,
+    delete_calendar_event,
+    modify_calendar_event,
+)
 from services.gemini_service import generate_agent_answer as generate_gemini_answer
 from services.telegram_service import send_telegram_message
 
@@ -44,46 +42,8 @@ app.add_middleware(
 
 
 # -----------------------------------------------------------------------------
-# Clientes
+# OAuth Google Calendar
 # -----------------------------------------------------------------------------
-
-def get_calendar_service():
-    """
-    Preferência:
-    1. OAuth pessoal via GOOGLE_REFRESH_TOKEN.
-    2. Fallback opcional via GOOGLE_CREDENTIALS/service account.
-
-    Para agenda pessoal, o recomendado é OAuth + GOOGLE_REFRESH_TOKEN.
-    """
-    try:
-        if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GOOGLE_REFRESH_TOKEN:
-            creds = Credentials(
-                token=None,
-                refresh_token=GOOGLE_REFRESH_TOKEN,
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=GOOGLE_CLIENT_ID,
-                client_secret=GOOGLE_CLIENT_SECRET,
-                scopes=SCOPES,
-            )
-            return build("calendar", "v3", credentials=creds)
-
-        if GOOGLE_CREDENTIALS:
-            creds_info = json.loads(GOOGLE_CREDENTIALS)
-            creds = service_account.Credentials.from_service_account_info(
-                creds_info,
-                scopes=SCOPES,
-            )
-            return build("calendar", "v3", credentials=creds)
-
-        return None
-
-    except json.JSONDecodeError:
-        print("Erro Calendar: GOOGLE_CREDENTIALS não é um JSON válido.")
-        return None
-    except Exception as e:
-        print(f"Erro Calendar ao construir serviço: {e}")
-        return None
-
 
 @app.get("/authorize")
 def authorize():
@@ -113,118 +73,6 @@ def oauth_callback(code: str):
         "next_step": "Copie o refresh_token abaixo e salve no Render como GOOGLE_REFRESH_TOKEN. Depois faça Restart Service.",
         "GOOGLE_REFRESH_TOKEN": credentials.refresh_token,
     }
-
-
-# -----------------------------------------------------------------------------
-# Funções de Calendar
-# -----------------------------------------------------------------------------
-
-def format_event(e: Dict) -> Dict:
-    start = e.get("start", {}).get("dateTime", e.get("start", {}).get("date"))
-    end = e.get("end", {}).get("dateTime", e.get("end", {}).get("date"))
-    return {
-        "summary": e.get("summary", "Sem título"),
-        "start": start,
-        "end": end,
-        "event_id": e.get("id"),
-    }
-
-
-def list_calendar_events(
-    max_results: int = 10,
-    start_datetime: Optional[str] = None,
-    end_datetime: Optional[str] = None,
-) -> List[Dict]:
-    service = get_calendar_service()
-    if not service:
-        return [{"error": "Serviço de calendário não configurado. Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REFRESH_TOKEN."}]
-
-    time_min_filter = start_datetime or (datetime.datetime.utcnow().isoformat() + "Z")
-
-    try:
-        request = service.events().list(
-            calendarId=CALENDAR_ID,
-            timeMin=time_min_filter,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        )
-        if end_datetime:
-            request.uri += f"&timeMax={end_datetime}"
-
-        events_result = request.execute()
-        events = events_result.get("items", [])
-        return [format_event(e) for e in events]
-
-    except Exception as e:
-        return [{"error": f"Erro ao listar eventos no Google Calendar: {e}"}]
-
-
-def add_calendar_event(
-    summary: str,
-    start_datetime: str,
-    end_datetime: str,
-    timezone: str = USER_TIMEZONE,
-) -> Dict:
-    service = get_calendar_service()
-    if not service:
-        return {"error": "Serviço de calendário não configurado."}
-
-    event_body = {
-        "summary": summary,
-        "start": {"dateTime": start_datetime, "timeZone": timezone},
-        "end": {"dateTime": end_datetime, "timeZone": timezone},
-    }
-
-    try:
-        event = service.events().insert(calendarId=CALENDAR_ID, body=event_body).execute()
-        return {"created": True, "event_id": event.get("id"), "summary": event.get("summary")}
-    except Exception as e:
-        return {"error": f"Erro ao criar evento: {e}"}
-
-
-def delete_calendar_event(event_id: str) -> Dict:
-    service = get_calendar_service()
-    if not service:
-        return {"error": "Serviço de calendário não configurado."}
-
-    try:
-        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
-        return {"deleted": True, "event_id": event_id}
-    except Exception as e:
-        return {"error": f"Erro ao excluir evento {event_id}: {e}"}
-
-
-def modify_calendar_event(
-    event_id: str,
-    summary: Optional[str] = None,
-    start_datetime: Optional[str] = None,
-    end_datetime: Optional[str] = None,
-    timezone: str = USER_TIMEZONE,
-) -> Dict:
-    service = get_calendar_service()
-    if not service:
-        return {"error": "Serviço de calendário não configurado."}
-
-    try:
-        existing_event = service.events().get(calendarId=CALENDAR_ID, eventId=event_id).execute()
-
-        if summary is not None:
-            existing_event["summary"] = summary
-        if start_datetime is not None:
-            existing_event["start"] = {"dateTime": start_datetime, "timeZone": timezone}
-        if end_datetime is not None:
-            existing_event["end"] = {"dateTime": end_datetime, "timeZone": timezone}
-
-        updated_event = service.events().update(
-            calendarId=CALENDAR_ID,
-            eventId=event_id,
-            body=existing_event,
-        ).execute()
-
-        return {"modified": True, "event_id": event_id, "summary": updated_event.get("summary")}
-    except Exception as e:
-        return {"error": f"Erro ao modificar evento {event_id}: {e}"}
 
 
 # -----------------------------------------------------------------------------
