@@ -1,7 +1,8 @@
 import datetime
 import json
+import re
 import requests
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -134,6 +135,64 @@ def post_chat_completion(payload: Dict) -> Dict:
     return response.json()
 
 
+def parse_text_tool_call(content: str) -> Optional[Tuple[str, Dict]]:
+    if not content or "<tool_call>" not in content:
+        return None
+
+    function_match = re.search(r"<function=([a-zA-Z0-9_]+)>", content)
+    if not function_match:
+        return None
+
+    function_name = function_match.group(1)
+    args = {}
+
+    for param_name, param_value in re.findall(
+        r"<parameter=([a-zA-Z0-9_]+)>\s*(.*?)\s*</parameter>",
+        content,
+        flags=re.DOTALL,
+    ):
+        value = param_value.strip()
+        if value.isdigit():
+            args[param_name] = int(value)
+        else:
+            args[param_name] = value
+
+    return function_name, args
+
+
+def execute_text_tool_call(content: str, tool_handlers: Optional[Dict]) -> Optional[Dict]:
+    parsed = parse_text_tool_call(content)
+    if not parsed:
+        return None
+
+    function_name, args = parsed
+    handler = (tool_handlers or {}).get(function_name)
+    if not handler:
+        return {
+            "answer": f"Função desconhecida: {function_name}",
+            "function_used": function_name,
+            "provider": "openrouter",
+        }
+
+    tool_output = handler(**args)
+
+    if isinstance(tool_output, dict) and tool_output.get("created"):
+        answer = f"Evento criado com sucesso: {tool_output.get('summary', 'Sem título')}"
+    elif isinstance(tool_output, dict) and tool_output.get("modified"):
+        answer = f"Evento modificado com sucesso: {tool_output.get('summary', 'Sem título')}"
+    elif isinstance(tool_output, dict) and tool_output.get("deleted"):
+        answer = "Evento excluído com sucesso."
+    else:
+        answer = json.dumps(tool_output, ensure_ascii=False)
+
+    return {
+        "answer": answer,
+        "function_used": function_name,
+        "provider": "openrouter",
+        "tool_output": tool_output,
+    }
+
+
 def generate_openrouter_answer(
     query: str,
     history: Optional[str] = None,
@@ -162,10 +221,15 @@ def generate_openrouter_answer(
         data = post_chat_completion(payload)
         message = data["choices"][0]["message"]
         tool_calls = message.get("tool_calls") or []
+        content = message.get("content") or ""
 
         if not tool_calls:
+            text_tool_result = execute_text_tool_call(content, tool_handlers)
+            if text_tool_result:
+                return text_tool_result
+
             return {
-                "answer": message.get("content") or "Sem resposta do modelo.",
+                "answer": content or "Sem resposta do modelo.",
                 "function_used": None,
                 "provider": "openrouter",
             }
