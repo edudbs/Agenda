@@ -23,3 +23,4 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 CALENDAR_ID = os.getenv("CALENDAR_ID", "primary")
 USER_TIMEZONE = os.getenv("USER_TIMEZONE", "America/Sao_Paulo")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_EMBEDDING_MODEL = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
