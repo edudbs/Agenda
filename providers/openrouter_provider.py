@@ -1,3 +1,4 @@
+import datetime
 import json
 import requests
 from typing import Dict, Optional
@@ -10,18 +11,27 @@ from config import (
     OPENROUTER_MODEL,
     OPENROUTER_SITE_URL,
     OPENROUTER_APP_NAME,
+    USER_TIMEZONE,
 )
 
 
-SYSTEM_PROMPT = (
-    "Você é um planejador de agenda inteligente, prático e consultivo. "
-    "Responda em português do Brasil, com listas curtas e objetivas. "
-    "Considere memórias relevantes do usuário quando presentes no contexto. "
-    "Você pode consultar, criar, modificar e excluir eventos do Google Calendar usando as ferramentas disponíveis. "
-    "Sempre que o usuário pedir agenda, compromissos, horários livres ou planejamento do dia, consulte a agenda primeiro. "
-    "Para criar ou modificar eventos, use data/hora local no formato ISO, sem sufixo Z. "
-    "Se houver ambiguidade, pergunte antes de alterar ou excluir eventos."
-)
+def build_system_prompt() -> str:
+    now_utc = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    today_local = datetime.datetime.now().date().isoformat()
+    return (
+        "Você é um planejador de agenda inteligente, prático e consultivo. "
+        f"A data local de hoje é: {today_local}. "
+        f"A data e hora atual em UTC são: {now_utc}. "
+        f"O fuso horário local do usuário é: {USER_TIMEZONE}. "
+        "Responda em português do Brasil, com listas curtas e objetivas. "
+        "Considere memórias relevantes do usuário quando presentes no contexto. "
+        "Você pode consultar, criar, modificar e excluir eventos do Google Calendar usando as ferramentas disponíveis. "
+        "Sempre que o usuário pedir agenda, compromissos, horários livres ou planejamento do dia, consulte a agenda primeiro. "
+        "Para perguntas sobre 'hoje', use a data local informada acima. "
+        "Para listar eventos, use datas em UTC com sufixo Z. "
+        "Para criar ou modificar eventos, use data/hora local no formato ISO, sem sufixo Z. "
+        "Se houver ambiguidade, pergunte antes de alterar ou excluir eventos."
+    )
 
 
 OPENROUTER_TOOLS = [
@@ -133,7 +143,7 @@ def generate_openrouter_answer(
         raise HTTPException(status_code=500, detail="OPENROUTER_API_KEY não configurada.")
 
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": build_system_prompt()},
     ]
 
     if history and history != "null":
