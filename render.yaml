@@ -3,6 +3,50 @@ services:
     name: agente-planejamento
     env: python
     plan: free
-    buildCommand: "pip install -r requirements.txt"
+    buildCommand: "python -m pip install --upgrade pip && pip install -r requirements.txt"
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /ping
     autoDeploy: true
+    envVars:
+      - key: API_TOKEN
+        sync: false
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: ENABLE_MEMORY_EMBEDDINGS
+        value: "false"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: openrouter/free
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_SITE_URL
+        sync: false
+      - key: OPENROUTER_APP_NAME
+        value: Agenda
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GOOGLE_CREDENTIALS
+        sync: false
+      - key: CALENDAR_ID
+        value: primary
+      - key: USER_TIMEZONE
+        value: America/Sao_Paulo
+      - key: BASE_URL
+        value: https://agente-planejamento.onrender.com
+      - key: MEMORY_DB_PATH
+        value: agenda_memory.db
