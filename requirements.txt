@@ -1,12 +1,20 @@
+# Core da API
 fastapi
 uvicorn[standard]
+
+# Google Calendar / OAuth
 google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-# DEPENDÊNCIA CORRETA PARA O GEMINI SDK
-google-genai 
-# python-dotenv é útil para desenvolvimento local, mas o Render já usa env vars
-python-dotenv 
+
+# Gemini SDK
+google-genai
+
+# Integrações HTTP externas
+# Usado para Telegram e OpenRouter
 requests
-# A dependência 'openai' foi removida, pois você migrou para o Gemini
+
+# Desenvolvimento local
+# No Render, as variáveis são configuradas diretamente no painel de Environment.
+python-dotenv
